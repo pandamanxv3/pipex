@@ -12,7 +12,7 @@
 # define ERR_ARG "invalid number of arguments\n"
 # define ERR_SPLIT "split didn't work\n"
 # define ERR_MAL "struct's malloc failed\n"
-# define ERR_ARGNF "la commande n'a pas été trouvé"
+# define ERR_FORK "fork didn't work"
 # define ERR_OUT "outfile cannot open"
 # define ERR_IN "infile cannot open"
 
@@ -143,7 +143,7 @@ void ft_error(t_data *general, int key)
 
 	else if (key == 4)
 	{
-		perror(ERR_ARGNF);
+		perror(ERR_FORK);
 		ft_splitfree(general->splitpath);
 		close(general->infilefd);
 		close(general->outfilefd);
@@ -395,11 +395,10 @@ int	getpath(t_data *general)
 	int	i;
 
 	i = 0;
-	if(!extractpath(general))
+	if (!extractpath(general))
 		return(0);
 	ft_dispatchsplit(general);
 	findpath(general);
-
 	// printf("%s\n", general->lst->path);
 	// printf("%s\n", general->lst->next->path);
 	// printf("%s\n", general->lst->cmd[0]);
@@ -407,9 +406,38 @@ int	getpath(t_data *general)
 	// printf("%s\n", general->lst->next->cmd[0]);
 }
 
-t_data *intializing(int argc, char *argv[], char *envp[])
+t_data *initializing2(t_data *general)
 {
-	int	j;
+	int j;
+
+	general->fd = malloc(sizeof(int) * ((general->argc - 3) - 1) * 2);
+	if (!general->fd)
+		ft_error(general, 2);
+	j = 0;
+	while (j < general->argc - 4)
+	{
+		if(pipe(general->fd + j * 2) < 0)
+			ft_error(general, 21);
+		j++;
+	}
+	general->pid = malloc(sizeof(int) * (general->argc - 3));
+	if (!general->pid)
+		ft_error(general, 21);
+	j = 2;
+	general->lst = NULL;
+	general->lst = ft_nodenew(general->argv[j], general);
+	while (j < general->argc - 2)
+	{
+		j++;
+		ft_nodeadd_back(general->lst, 
+		ft_nodenew(general->argv[j], general));
+	}
+	return(general);
+}
+
+t_data *initializing(int argc, char *argv[], char *envp[])
+{
+	int		j;
 	t_data	*general;
 
 	j = 2;
@@ -431,29 +459,9 @@ t_data *intializing(int argc, char *argv[], char *envp[])
 	general->i = 0;
 	general->returnvalue = 0;
 	general->splitpath = NULL;
-	general->fd = malloc(sizeof(int) * ((argc - 3) - 1) * 2);
-	if (!general->fd)
-		ft_error(general, 2);
-	j = 0;
-	while (j < argc - 4)
-	{
-		if(pipe(general->fd + j * 2) < 0)
-			ft_error(general, 21);
-		j++;
-	}
-	general->pid = malloc(sizeof(int) * (argc - 3));
-	if (!general->pid)
-		ft_error(general, 21);
-	j = 2;
-	general->lst = NULL;
-	general->lst = ft_nodenew(argv[j], general);
-	while (j < argc - 2)
-	{
-		j++;
-		ft_nodeadd_back(general->lst, ft_nodenew(argv[j], general));
-	}
-	return(general);
+	return(initializing2(general));
 }
+
 
 //----------------------------------------------------------------------------------------- 
 
@@ -478,8 +486,8 @@ void	ft_closeall(t_data	*general)
 void	ft_pipexin(t_data *general, t_node *lst)
 {
 	general->pid[general->i] = fork();
-	if(general->pid[general->i] < 0)
-			return; //ft_error
+	if (general->pid[general->i] < 0)
+			ft_error(general, 4);
 	else if (general->pid[general->i] == 0)
 	{
 		ft_dup2(general->infilefd, general->fd[1]);
@@ -496,22 +504,21 @@ void	ft_pipexin(t_data *general, t_node *lst)
 void	ft_pipexloop(t_data *general, t_node *lst)
 {
 
-		general->pid[general->i] = fork();
-		if(general->pid[general->i] < 0)
-			return; //ft_error
-		else if(general->pid[general->i] == 0)
+	general->pid[general->i] = fork();
+	if(general->pid[general->i] < 0)
+		ft_error(general, 4);
+	else if(general->pid[general->i] == 0)
+	{
+		ft_dup2(general->fd[general->i * 2 - 2], general->fd[general->i * 2 + 1]);
+		ft_closeall(general); // placement ?
+		if (execve(lst->path, lst->cmd, general->envp) == -1)
 		{
-			ft_dup2(general->fd[general->i * 2 - 2], general->fd[general->i * 2 + 1]);
-			ft_closeall(general); // placement ?
-		// printf(" %s; %s, %s \n",lst->path, lst->cmd[0], general->envp[0]);
-			if (execve(lst->path, lst->cmd, general->envp) == -1)
-			{
-				write(2, "command not found: ", 19);
-				write(2, lst->cmd[0], ft_strlen(lst->cmd[0]));
-				write(2, "\n", 1);
-				exit(1);
-			}	
-		}
+			write(2, "command not found: ", 19);
+			write(2, lst->cmd[0], ft_strlen(lst->cmd[0]));
+			write(2, "\n", 1);
+			exit(1);
+		}	
+	}
 }
 
 void	ft_pipexout(t_data *general, t_node *lst)
@@ -519,8 +526,8 @@ void	ft_pipexout(t_data *general, t_node *lst)
 	if (access(lst->path, F_OK) == -1)
 		general->returnvalue = 127;
 	general->pid[general->i] = fork();
-	if(general->pid[general->i] < 0)
-			return; //ft_error
+	if (general->pid[general->i] < 0)
+			ft_error(general, 4);
 	else if (general->pid[general->i] == 0)
 	{
 		ft_dup2(general->fd[general->i * 2 - 2], general->outfilefd);
@@ -538,7 +545,9 @@ void	ft_pipexout(t_data *general, t_node *lst)
 void	ft_pipexdispatch(t_data *general)
 {
 	t_node	*lst;
-	
+	int		j;
+
+	j = 0;
 	lst = general->lst;
 	ft_pipexin(general, lst);
 	general->i++;
@@ -550,6 +559,12 @@ void	ft_pipexdispatch(t_data *general)
 		general->i++;
 	}
 	ft_pipexout(general, lst);
+	while (j <= general->i)
+	{
+		waitpid(general->pid[j], NULL, 0);
+		j++;
+	}
+
 	ft_closeall(general);
 }
 
@@ -557,9 +572,10 @@ int	main(int argc, char *argv[], char *envp[])
 {
 	t_data	*general;
 	int	returnvalue;
-	if(envp == NULL)
+
+	if (envp == NULL)
 		return 1;
-	general = intializing(argc, argv, envp);
+	general = initializing(argc, argv, envp);
 	getpath(general);
 	ft_pipexdispatch(general);
 	ft_nodeclear(general);
